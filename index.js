@@ -192,6 +192,42 @@ async function run() {
         });
 
 
+        app.get('/users-summary', async (req, res) => {
+            try {
+
+                // সব ইউজার
+                const allUsers = await userCollection.find().toArray();
+
+                // শুধু HR
+                const hrUsers = await userCollection.find({ role: 'hr' }).toArray();
+
+                // শুধু Employee
+                const employeeUsers = await userCollection.find({ role: 'employee' }).toArray();
+
+                res.send({
+                    success: true,
+                    message: "Users summary loaded successfully",
+                    data: {
+                        allUsers,
+                        hrUsers,
+                        employeeUsers
+                    }
+                });
+
+            } catch (error) {
+                console.error("users-summary error:", error);
+                res.status(500).send({
+                    success: false,
+                    message: "Failed to load users summary",
+                    error: error.message
+                });
+            }
+        });
+
+
+
+
+
 
 
 
@@ -386,10 +422,15 @@ async function run() {
         });
 
         app.post('/assets', verifyToken, async (req, res) => {
-            const assets = req.body;
-            const result = await assetCollection.insertOne(assets)
-            res.send(result)
-        })
+            const assets = {
+                ...req.body,
+                timestamp: new Date()  // <-- ADD THIS
+            };
+
+            const result = await assetCollection.insertOne(assets);
+            res.send(result);
+        });
+
         // get all assets data in db
         app.get('/assets', async (req, res) => {
             const result = await assetCollection.find().toArray()
@@ -574,12 +615,243 @@ async function run() {
 
 
 
+        // Admin Dashboard Summary API
+        // Admin Dashboard Summary API
+        app.get('/admin-summary', verifyToken, async (req, res) => {
+            try {
+                // Admin ছাড়া অন্য কেউ যেন access না করতে পারে
+                const adminEmail = req.user.email;
+                const adminData = await userCollection.findOne({ email: adminEmail });
+
+                if (!adminData || adminData.role !== 'admin') {
+                    return res.status(403).send({ message: 'Forbidden: Only admin can access this data.' });
+                }
+
+                // Total users
+                const totalUsers = await userCollection.countDocuments();
+
+                // Total HR
+                const totalHr = await userCollection.countDocuments({ role: 'hr' });
+
+                // Total Employees
+                const totalEmployee = await userCollection.countDocuments({ role: 'employee' });
+
+                // Total Assets
+                const totalAssets = await assetCollection.countDocuments();
+
+                res.send({
+                    success: true,
+                    message: "Admin summary fetched successfully",
+                    data: {
+                        totalUsers,
+                        totalHr,
+                        totalEmployee,
+                        totalAssets
+                    }
+                });
+
+            } catch (error) {
+                console.error("Admin summary error:", error);
+                res.status(500).send({
+                    success: false,
+                    message: "Failed to fetch admin summary",
+                    error: error.message
+                });
+            }
+        });
+
+
+        app.patch("/update-role/:id", async (req, res) => {
+            try {
+                const { id } = req.params;
+                let { role } = req.body;
+
+                // Remove Role -> make it empty
+                if (role === "remove") {
+                    role = "";
+                }
+
+                // Update role in DB
+                const result = await userCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: { role: role } }
+                );
+
+                if (result.modifiedCount > 0) {
+                    return res.send({
+                        success: true,
+                        message: "Role updated successfully!",
+                    });
+                }
+
+                res.send({
+                    success: false,
+                    message: "No changes were made.",
+                });
+
+            } catch (error) {
+                console.error("Role update error:", error);
+                res.status(500).send({
+                    success: false,
+                    message: "Server error while updating role.",
+                    error: error.message,
+                });
+            }
+        });
+        app.delete('/delete-user/:id', async (req, res) => {
+            try {
+                const id = req.params.id;
+
+                const result = await userCollection.deleteOne({ _id: new ObjectId(id) });
+
+                if (result.deletedCount === 1) {
+                    res.send({
+                        success: true,
+                        message: "User deleted successfully",
+                    });
+                } else {
+                    res.status(404).send({
+                        success: false,
+                        message: "User not found",
+                    });
+                }
+
+            } catch (error) {
+                console.error("Delete user error:", error);
+                res.status(500).send({
+                    success: false,
+                    message: "Failed to delete user",
+                    error: error.message,
+                });
+            }
+        });
 
 
 
 
 
 
+        app.get('/assets-monthly-stats', async (req, res) => {
+            try {
+
+                const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+                const totalAssets = await assetCollection.countDocuments();
+                const returnable = await assetCollection.countDocuments({ assetsType: "returnable" });
+                const nonReturnable = await assetCollection.countDocuments({ assetsType: "non-returnable" });
+
+                const issuedAssets = await requestCollection.countDocuments({ status: "approved" });
+
+                const pipeline = [
+                    {
+                        $addFields: {
+                            dateObj: {
+                                $cond: [
+                                    { $eq: [{ $type: "$timestamp" }, "string"] },
+                                    { $toDate: "$timestamp" },
+                                    {
+                                        $cond: [
+                                            { $eq: [{ $type: "$timestamp" }, "long"] },
+                                            { $toDate: "$timestamp" },
+                                            null
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    {
+                        $group: {
+                            _id: { $month: "$dateObj" },
+                            total: { $sum: 1 },
+                        }
+                    },
+                    { $sort: { "_id": 1 } }
+                ];
+
+                const raw = await assetCollection.aggregate(pipeline).toArray();
+
+                const monthly = raw.map(item => ({
+                    month: months[item._id - 1],
+                    assets: item.total
+                }));
+
+                res.send({
+                    success: true,
+                    data: {
+                        totalAssets,
+                        issuedAssets,
+                        returnable,
+                        nonReturnable,
+                        monthly
+                    }
+                });
+
+            } catch (error) {
+                console.log(error);
+                res.status(500).send({ message: "Failed to load assets monthly stats" });
+            }
+        });
+
+
+        app.get('/users-monthly-stats', async (req, res) => {
+            try {
+
+                const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+                const total = await userCollection.countDocuments();
+                const hr = await userCollection.countDocuments({ role: "hr" });
+                const employee = await userCollection.countDocuments({ role: "employee" });
+
+                const pipeline = [
+                    {
+                        $addFields: {
+                            dateObj: {
+                                $cond: [
+                                    { $eq: [{ $type: "$timestamp" }, "string"] },
+                                    { $toDate: "$timestamp" },
+                                    {
+                                        $cond: [
+                                            { $eq: [{ $type: "$timestamp" }, "long"] },
+                                            { $toDate: "$timestamp" },
+                                            null
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    {
+                        $group: {
+                            _id: { $month: "$dateObj" },
+                            total: { $sum: 1 }
+                        }
+                    },
+                    { $sort: { "_id": 1 } }
+                ];
+
+                const raw = await userCollection.aggregate(pipeline).toArray();
+
+                const monthly = raw.map(item => ({
+                    month: months[item._id - 1],
+                    users: item.total
+                }));
+
+                res.send({
+                    success: true,
+                    data: {
+                        total,
+                        hr,
+                        employee,
+                        monthly
+                    }
+                });
+
+            } catch (error) {
+                console.log(error);
+                res.status(500).send({ message: "Failed to load user monthly stats" });
+            }
+        });
 
 
 
