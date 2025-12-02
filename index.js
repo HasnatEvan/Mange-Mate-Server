@@ -157,39 +157,44 @@ async function run() {
         });
 
 
-        app.get('/team-members/:hrEmail', async (req, res) => {
-            const hrEmail = req.params.hrEmail;
+       app.get('/team-members/:hrEmail', async (req, res) => {
+    const hrEmail = req.params.hrEmail;
 
-            try {
-                // HR email দিয়ে ইউজারদের খুঁজুন
-                const users = await userCollection.find({ hrEmail }).toArray();
+    try {
+        const users = await userCollection.find({ hrEmail }).toArray();
 
-                if (!users || users.length === 0) {
-                    return res.status(404).send({
-                        success: false,
-                        message: 'No team members found for this HR email',
-                    });
-                }
+        if (!users || users.length === 0) {
+            return res.status(404).send({
+                success: false,
+                message: 'No team members found for this HR email',
+            });
+        }
 
-                res.send({
-                    success: true,
-                    members: users.map(user => ({
-                        name: user.name,
-                        email: user.email,
-                        dob: user.dob,
-                        role: user.role,
-                        status: user.status,
-                    })),
-                });
-            } catch (error) {
-                console.error("Error fetching team members:", error);
-                res.status(500).send({
-                    success: false,
-                    message: 'Failed to fetch team members',
-                    error: error.message,
-                });
-            }
+        res.send({
+            success: true,
+            members: users.map(user => ({
+                _id: user._id,
+                name: user.name,
+                companyName: user.companyName,
+                gender: user.gender,
+                photoURL: user.photoURL,
+                email: user.email,
+                dob: user.dob,
+                timestamp: user.timestamp,
+                role: user.role,
+                // status: user.status  ❌ (You said status lagbe na)
+            })),
         });
+    } catch (error) {
+        console.error("Error fetching team members:", error);
+        res.status(500).send({
+            success: false,
+            message: 'Failed to fetch team members',
+            error: error.message,
+        });
+    }
+});
+
 
 
         app.get('/users-summary', async (req, res) => {
@@ -373,6 +378,71 @@ async function run() {
 
 
 
+// Change Request Status Dynamically
+app.patch('/request/status/:id', verifyToken, async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { status } = req.body;
+
+        if (!status) {
+            return res.status(400).send({
+                success: false,
+                message: "Status field is required"
+            });
+        }
+
+        // Allowed status list
+        const allowedStatus = ["pending", "approved", "returned"];
+
+        if (!allowedStatus.includes(status)) {
+            return res.status(400).send({
+                success: false,
+                message: "Invalid status value"
+            });
+        }
+
+        const filter = { _id: new ObjectId(id) };
+
+        const updateDoc = {
+            $set: {
+                status,
+                statusUpdatedAt: new Date(), // track changes
+            }
+        };
+
+        // IF STATUS APPROVED → SAVE APPROVAL DATE
+        if (status === "approved") {
+            updateDoc.$set.approvalDate = new Date();
+        }
+
+        // IF STATUS RETURNED → RETURN DATE
+        if (status === "returned") {
+            updateDoc.$set.returnedDate = new Date();
+        }
+
+        const result = await requestCollection.updateOne(filter, updateDoc);
+
+        if (result.modifiedCount === 0) {
+            return res.status(404).send({
+                success: false,
+                message: "Request not found or no changes applied"
+            });
+        }
+
+        res.send({
+            success: true,
+            message: `Request status updated to ${status}`,
+        });
+
+    } catch (error) {
+        console.error("Update status error:", error);
+        res.status(500).send({
+            success: false,
+            message: "Failed to update status",
+            error: error.message,
+        });
+    }
+});
 
 
 
@@ -725,6 +795,200 @@ async function run() {
                 });
             }
         });
+
+
+
+
+
+
+app.get('/hr-dashboard/:email', verifyToken, async (req, res) => {
+    const hrEmail = req.params.email;
+
+    try {
+        // HR Verification
+        const hrUser = await userCollection.findOne({ email: hrEmail });
+
+        if (!hrUser || hrUser.role !== "hr") {
+            return res.status(403).send({
+                success: false,
+                message: "Forbidden: Only HR can access this data."
+            });
+        }
+
+        // Total Employees under this HR
+        const totalEmployees = await userCollection.countDocuments({ hrEmail });
+
+        // Employee List (Latest 5)
+        const recentEmployees = await userCollection
+            .find({ hrEmail })
+            .sort({ timestamp: -1 })
+            .limit(5)
+            .toArray();
+
+        // Total Assets added by this HR
+        const totalAssets = await assetCollection.countDocuments({ "hr.email": hrEmail });
+
+        // Returnable / Non-returnable
+        const returnable = await assetCollection.countDocuments({
+            "hr.email": hrEmail,
+            assetsType: "returnable"
+        });
+
+        const nonReturnable = await assetCollection.countDocuments({
+            "hr.email": hrEmail,
+            assetsType: "non-returnable"
+        });
+
+        // Requests Summary (only requests related to this HR)
+        const pendingRequests = await requestCollection.countDocuments({
+            assetsOwner: hrEmail,
+            status: "pending"
+        });
+
+        const approvedRequests = await requestCollection.countDocuments({
+            assetsOwner: hrEmail,
+            status: "approved"
+        });
+
+        // ⭐ Returned Requests (added)
+        const returnedRequests = await requestCollection.countDocuments({
+            assetsOwner: hrEmail,
+            status: "returned"
+        });
+
+        // Recent 5 Requests
+        const recentRequests = await requestCollection
+            .find({ assetsOwner: hrEmail })
+            .sort({ date: -1 })
+            .limit(5)
+            .toArray();
+
+        res.send({
+            success: true,
+            message: "HR Dashboard data loaded successfully",
+            data: {
+                totalEmployees,
+                recentEmployees,
+                totalAssets,
+                returnable,
+                nonReturnable,
+                pendingRequests,
+                approvedRequests,
+                returnedRequests,  // ⭐ added
+                recentRequests
+            }
+        });
+
+    } catch (error) {
+        console.error("HR Dashboard error:", error);
+        res.status(500).send({
+            success: false,
+            message: "Failed to load HR dashboard",
+            error: error.message,
+        });
+    }
+});
+
+
+
+// ===============================================
+// ⭐ EMPLOYEE DASHBOARD API
+// ===============================================
+app.get("/employee-dashboard/:email", verifyToken, async (req, res) => {
+    const email = req.params.email;
+
+    try {
+        // Check if employee exists
+        const employee = await userCollection.findOne({ email });
+
+        if (!employee || employee.role !== "employee") {
+            return res.status(403).send({
+                success: false,
+                message: "Forbidden: Only employees can access this dashboard."
+            });
+        }
+
+        // Total requests by this employee
+        const totalRequests = await requestCollection.countDocuments({
+            "employ.email": email
+        });
+
+        // Pending
+        const pendingRequests = await requestCollection.countDocuments({
+            "employ.email": email,
+            status: "pending"
+        });
+
+        // Approved
+        const approvedRequests = await requestCollection.countDocuments({
+            "employ.email": email,
+            status: "approved"
+        });
+
+        // Returned
+        const returnedRequests = await requestCollection.countDocuments({
+            "employ.email": email,
+            status: "returned"
+        });
+
+        // Total Assets assigned to employee (approved requests)
+        const totalAssetsReceived = await requestCollection.countDocuments({
+            "employ.email": email,
+            status: "approved"
+        });
+
+        // Recent Requests (last 5)
+        const recentRequests = await requestCollection
+            .find({ "employ.email": email })
+            .sort({ date: -1 })
+            .limit(5)
+            .toArray();
+
+        res.send({
+            success: true,
+            message: "Employee Dashboard Data Loaded Successfully",
+            data: {
+                employeeInfo: {
+                    name: employee.name,
+                    email: employee.email,
+                    photoURL: employee.photoURL,
+                    hrEmail: employee.hrEmail,
+                },
+                totalRequests,
+                pendingRequests,
+                approvedRequests,
+                returnedRequests,
+                totalAssetsReceived,
+                recentRequests
+            }
+        });
+
+    } catch (error) {
+        console.error("Employee Dashboard Error:", error);
+        res.status(500).send({
+            success: false,
+            message: "Failed to load employee dashboard",
+            error: error.message
+        });
+    }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
