@@ -8,17 +8,15 @@ const jwt = require('jsonwebtoken')
 
 const port = process.env.PORT || 5000
 const app = express()
-// middleware
+// Middleware
 const corsOptions = {
-    origin: ['http://localhost:5173', 'http://localhost:5174'],
-    credentials: true,
-    optionSuccessStatus: 200,
+  origin: ['http://localhost:5173', 'https://rococo-sable-d93a0b.netlify.app','https://fastforwardlogistics.org'],
+  credentials: true,
+  optionSuccessStatus: 200,
 }
 app.use(cors(corsOptions))
-
 app.use(express.json())
 app.use(cookieParser())
-
 
 const verifyToken = async (req, res, next) => {
     const token = req.cookies?.token
@@ -62,36 +60,32 @@ async function run() {
 
 
 
-        // Generate jwt token
-        app.post('/jwt', async (req, res) => {
-            const email = req.body
-            const token = jwt.sign(email, process.env.ACCESS_TOKEN_SECRET, {
-                expiresIn: '365d',
-            })
-            res
-                .cookie('token', token, {
-                    httpOnly: true,
-                    secure: process.env.NODE_ENV === 'production',
-                    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'strict',
-                })
-                .send({ success: true })
-        })
-        // Logout
-        app.get('/logout', async (req, res) => {
-            try {
-                res
-                    .clearCookie('token', {
-                        maxAge: 0,
-                        secure: process.env.NODE_ENV === 'production',
-                        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'strict',
-                    })
-                    .send({ success: true })
-            } catch (err) {
-                res.status(500).send(err)
-            }
-        })
+         // ✅ Generate JWT Token
+    app.post('/jwt', async (req, res) => {
+      const user = req.body; // expecting { email: "abc@email.com" }
 
+      const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
+        expiresIn: '7d',
+      });
 
+      res
+        .cookie('token', token, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'strict',
+        })
+        .send({ success: true });
+    });
+
+    // ✅ Clear Cookie (Logout)
+   app.get('/logout', (req, res) => {
+  res
+    .clearCookie('token', {
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'strict',
+    })
+    .send({ success: true });
+});
 
 
 
@@ -1123,7 +1117,7 @@ app.get("/employee-dashboard/:email", verifyToken, async (req, res) => {
 
 
         // Send a ping to confirm a successful connection
-        await client.db('admin').command({ ping: 1 })
+        // await client.db('admin').command({ ping: 1 })
         console.log(
             'Pinged your deployment. You successfully connected to MongoDB!'
         )
